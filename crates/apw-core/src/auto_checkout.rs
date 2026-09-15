@@ -136,13 +136,37 @@ r#"// ==UserScript==
         input.dispatchEvent(new Event('blur', {{ bubbles: true }}));
     }}
 
-    // 步骤 1：商品详情页快速加购
+    // 步骤 1：商品详情页快速加购与加购后浮层极速推进
     function handleProductPage() {{
-        const addBtn = document.querySelector('button[name="add-to-cart"], button[data-autom="add-to-cart"], button[type="submit"].as-purchaseinfo-button');
+        // 1.1 加购后弹出的侧边抽屉或浮层，优先点击「结账」或「查看购物袋」
+        const overlayProceedBtn = document.querySelector(
+            'button[name="proceed"], button[data-autom="proceed-to-checkout"], button[data-autom="checkout"], a[data-autom="checkout"], button.as-overlay-action, a[href*="/shop/bag"]'
+        );
+        if (overlayProceedBtn && !overlayProceedBtn.disabled) {{
+            showHUD('商品已入袋，正在极速进入结账...', false);
+            overlayProceedBtn.click();
+            return;
+        }}
+
+        // 1.2 主加购按钮（覆盖详情页、选配页及浮动栏）
+        const addBtn = document.querySelector(
+            'button[name="add-to-cart"], button[data-autom="add-to-cart"], button[data-autom="addToCart"], button[id*="add-to-cart"], button[type="submit"].as-purchaseinfo-button, button.as-purchaseinfo-button, .as-buyflow-addtocart button'
+        );
         if (addBtn && !addBtn.disabled) {{
-            showHUD('检测到商品页，正在极速加入购物袋...');
+            showHUD('检测到目标商品页，正在极速加入购物袋...');
             addBtn.click();
             playBeep();
+            // 如果加购后未自动跳转，1.5 秒后保底直跳购物袋推进
+            setTimeout(() => {{
+                if (window.location.href.includes('/shop/buy-') || window.location.href.includes('/shop/product/')) {{
+                    const currentBagBtn = document.querySelector('button[name="proceed"], button[data-autom="proceed-to-checkout"], a[href*="/shop/bag"]');
+                    if (currentBagBtn) {{
+                        currentBagBtn.click();
+                    }} else {{
+                        window.location.href = 'https://www.apple.com.cn/shop/bag';
+                    }}
+                }}
+            }}, 1500);
         }}
     }}
 
@@ -157,6 +181,11 @@ r#"// ==UserScript==
             showHUD('正在自动点击结账...', false);
             playBeep();
             setTimeout(() => checkoutBtn.click(), 50);
+        }} else {{
+            const emptyNotice = document.querySelector('.as-shoppingcart-empty, [data-autom*="empty"]');
+            if (emptyNotice) {{
+                showHUD('⚠️ 购物袋当前为空，请确认目标商品是否已成功加购', false);
+            }}
         }}
     }}
 

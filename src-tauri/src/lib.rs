@@ -926,15 +926,17 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
                 .map(|s| s.settings_snapshot())
                 .unwrap_or_default();
             let auto_checkout = settings.auto_checkout.enabled;
-            let destination_url = target_open_url(&app, target, settings.open_on_hit)
-                .or_else(|| {
-                    if auto_checkout {
-                        target_purchase_url(&app, target)
-                            .or_else(|| region_by_locale(&target.locale).map(|r| r.bag_url()))
-                    } else {
-                        None
-                    }
-                });
+            // 当开启自动下单时，必须优先打开该有货商品的直达配置/加购页（而非可能为空的购物袋），
+            // 确保由油猴脚本全自动完成加购并推进至秒级结账流程
+            let (destination_url, actual_destination) = if auto_checkout {
+                if let Some(prod_url) = target_purchase_url(&app, target) {
+                    (Some(prod_url), OpenOnHit::Product)
+                } else {
+                    (region_by_locale(&target.locale).map(|r| r.bag_url()), OpenOnHit::Bag)
+                }
+            } else {
+                (target_open_url(&app, target, settings.open_on_hit), settings.open_on_hit)
+            };
             let bark_url = settings.bark_url_for(target).to_owned();
             let has_product_bark = settings.product_bark_urls.contains_key(&target.part_number);
             let mut notification = Notification::new("有货了", in_stock_notification_body(target));
@@ -948,12 +950,12 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
                 match destination_url {
                     Some(url) => match app.opener().open_url(url, None::<&str>) {
                         Ok(()) => {
-                            opened_destination = Some(settings.open_on_hit);
+                            opened_destination = Some(actual_destination);
                             if auto_checkout {
                                 let _ = app.emit(
                                     NOTICE_CHANNEL,
                                     format!(
-                                        "⚡ 已触发自动抢单通道：{} {}",
+                                        "⚡ 已触发自动抢单通道，已打开商品加购页：{} {}",
                                         target.store_title, target.product_name
                                     ),
                                 );
