@@ -769,6 +769,33 @@ fn get_in_stock_log_path() -> Result<String, String> {
         .to_string())
 }
 
+/// 生成当前配置绑定的专享油猴抢单脚本内容。
+#[tauri::command]
+fn get_auto_checkout_script(app: AppHandle) -> Result<String, String> {
+    let settings = app.state::<AppState>().settings_snapshot();
+    let target = settings.targets.first();
+    Ok(apw_core::auto_checkout::generate_userscript(&settings.auto_checkout, target))
+}
+
+/// 快速测试抢单直达通道（在系统默认浏览器中打开购物袋或首个目标商品）。
+#[tauri::command]
+fn test_auto_checkout(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let settings = app.state::<AppState>().settings_snapshot();
+    let target = settings.targets.first();
+    let url = if let Some(target) = target {
+        target_purchase_url(&app, target)
+            .or_else(|| region_by_locale(&target.locale).map(|r| r.bag_url()))
+    } else {
+        region_by_locale(&settings.locale).map(|r| r.bag_url())
+    };
+
+    let url = url.ok_or("无法生成测试页面地址，请先添加监控目标或选择地区")?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("打开测试页面失败：{e}"))
+}
+
 /// 手动测试提醒和首个目标的跳转，便于提前验证实际操作链路。
 #[tauri::command]
 async fn test_notify(app: AppHandle) -> Result<(), String> {
@@ -898,7 +925,16 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
                 .try_state::<AppState>()
                 .map(|s| s.settings_snapshot())
                 .unwrap_or_default();
-            let destination_url = target_open_url(&app, target, settings.open_on_hit);
+            let auto_checkout = settings.auto_checkout.enabled;
+            let destination_url = target_open_url(&app, target, settings.open_on_hit)
+                .or_else(|| {
+                    if auto_checkout {
+                        target_purchase_url(&app, target)
+                            .or_else(|| region_by_locale(&target.locale).map(|r| r.bag_url()))
+                    } else {
+                        None
+                    }
+                });
             let bark_url = settings.bark_url_for(target).to_owned();
             let has_product_bark = settings.product_bark_urls.contains_key(&target.part_number);
             let mut notification = Notification::new("有货了", in_stock_notification_body(target));
@@ -907,17 +943,32 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
             }
 
             let mut opened_destination = None;
-            if settings.open_on_hit != OpenOnHit::None {
+            if settings.open_on_hit != OpenOnHit::None || auto_checkout {
                 use tauri_plugin_opener::OpenerExt;
                 match destination_url {
                     Some(url) => match app.opener().open_url(url, None::<&str>) {
-                        Ok(()) => opened_destination = Some(settings.open_on_hit),
+                        Ok(()) => {
+                            opened_destination = Some(settings.open_on_hit);
+                            if auto_checkout {
+                                let _ = app.emit(
+                                    NOTICE_CHANNEL,
+                                    format!(
+                                        "⚡ 已触发自动抢单通道：{} {}",
+                                        target.store_title, target.product_name
+                                    ),
+                                );
+                            }
+                        }
                         Err(err) => {
                             let _ = app.emit(
                                 NOTICE_CHANNEL,
                                 format!(
                                     "自动打开{}失败：{err}",
-                                    destination_title(settings.open_on_hit)
+                                    if auto_checkout {
+                                        "抢单页面"
+                                    } else {
+                                        destination_title(settings.open_on_hit)
+                                    }
                                 ),
                             );
                         }
@@ -927,7 +978,11 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
                             NOTICE_CHANNEL,
                             format!(
                                 "自动打开{}失败：无法生成跳转地址",
-                                destination_title(settings.open_on_hit)
+                                if auto_checkout {
+                                    "抢单页面"
+                                } else {
+                                    destination_title(settings.open_on_hit)
+                                }
                             ),
                         );
                     }
@@ -944,6 +999,9 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
                 } else {
                     "Bark"
                 });
+            }
+            if auto_checkout {
+                actions.push("⚡自动抢单已触发");
             }
             if let Some(destination) = opened_destination {
                 match destination {
@@ -1211,6 +1269,8 @@ pub fn run() {
             open_in_stock_log,
             open_in_stock_log_dir,
             get_in_stock_log_path,
+            get_auto_checkout_script,
+            test_auto_checkout,
             check_for_update,
             install_update,
         ])

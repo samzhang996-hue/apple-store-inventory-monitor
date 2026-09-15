@@ -4,10 +4,13 @@ import {
   Activity,
   AlertTriangle,
   BellRing,
+  Check,
   ChevronDown,
   ChevronUp,
   Clock3,
+  Copy,
   Download,
+  ExternalLink,
   FileSpreadsheet,
   FolderOpen,
   MapPin,
@@ -26,6 +29,7 @@ import {
   Truck,
   Volume2,
   X,
+  Zap,
 } from "lucide-react";
 
 import { describeUpdateProgress, updatePercent } from "@/lib/updateStatus";
@@ -72,14 +76,13 @@ import {
   changeLocale,
   connect,
   dismissUpdate,
+  getAutoCheckoutScript,
   installUpdate,
   loadDeliveryLocalities,
   loadWatchBandChoices,
   loadWatchBandSizes,
-  openAuthorPage,
   openInStockLog,
   openInStockLogDir,
-  openProjectPage,
   openReleasePage,
   openTargetProduct,
   refreshProducts,
@@ -90,10 +93,12 @@ import {
   setTargets,
   startWatching,
   stopWatching,
+  testAutoCheckout,
   testNotify,
   watcherStore,
 } from "@/lib/store";
 import {
+  type AutoCheckoutConfig,
   type Availability,
   type DeliveryLocalities,
   type DeliveryRegion,
@@ -131,22 +136,6 @@ function compactProductName(name: string): string {
 
 function watchBandDescription(companionPart?: string): string | undefined {
   return companionPart ? `送货查询使用目录默认表带 ${companionPart}` : undefined;
-}
-
-function GithubBrandIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path fillRule="evenodd" d="M12 2C6.477 2 2 6.589 2 12.253c0 4.53 2.865 8.374 6.839 9.731.5.094.682-.222.682-.494 0-.244-.009-.888-.014-1.744-2.782.62-3.369-1.374-3.369-1.374-.455-1.184-1.11-1.499-1.11-1.499-.908-.636.069-.623.069-.623 1.004.073 1.532 1.057 1.532 1.057.892 1.568 2.341 1.115 2.91.853.091-.663.349-1.115.635-1.371-2.221-.259-4.555-1.14-4.555-5.067 0-1.119.389-2.034 1.029-2.751-.103-.26-.446-1.302.098-2.713 0 0 .84-.276 2.75 1.051A9.33 9.33 0 0 1 12 7.992a9.31 9.31 0 0 1 2.504.346c1.909-1.327 2.748-1.051 2.748-1.051.545 1.411.202 2.453.1 2.713.64.717 1.027 1.632 1.027 2.751 0 3.937-2.337 4.805-4.565 5.059.359.317.679.944.679 1.903 0 1.374-.012 2.482-.012 2.819 0 .275.18.593.688.493C19.14 20.625 22 16.783 22 12.253 22 6.589 17.523 2 12 2Z" clipRule="evenodd" />
-    </svg>
-  );
-}
-
-function XBrandIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z" />
-    </svg>
-  );
 }
 
 const TONE_CLASS: Record<StatusTone, string> = {
@@ -504,6 +493,59 @@ export default function App() {
   const [deliverySaving, setDeliverySaving] = useState(false);
   const deliveryRequestId = useRef(0);
 
+  const [copiedScript, setCopiedScript] = useState(false);
+  const [testingCheckout, setTestingCheckout] = useState(false);
+  const [autoCheckoutOpen, setAutoCheckoutOpen] = useState(false);
+  const [scriptCopyError, setScriptCopyError] = useState<string | null>(null);
+
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [phoneDraft, setPhoneDraft] = useState<string | null>(null);
+  const [idDraft, setIdDraft] = useState<string | null>(null);
+  const [emailDraft, setEmailDraft] = useState<string | null>(null);
+
+  const nameValue = nameDraft !== null ? nameDraft : (ui.settings.autoCheckout?.fullName ?? "");
+  const phoneValue = phoneDraft !== null ? phoneDraft : (ui.settings.autoCheckout?.phoneNumber ?? "");
+  const idValue = idDraft !== null ? idDraft : (ui.settings.autoCheckout?.idCardNumber ?? "");
+  const emailValue = emailDraft !== null ? emailDraft : (ui.settings.autoCheckout?.email ?? "");
+
+  const handleCopyScript = async () => {
+    try {
+      setScriptCopyError(null);
+      const code = await getAutoCheckoutScript();
+      await navigator.clipboard.writeText(code);
+      setCopiedScript(true);
+      setTimeout(() => setCopiedScript(false), 3000);
+    } catch (err) {
+      setScriptCopyError(`复制失败：${String(err)}`);
+    }
+  };
+
+  const handleTestCheckout = async () => {
+    try {
+      setTestingCheckout(true);
+      await testAutoCheckout();
+    } catch {
+      // logged by store
+    } finally {
+      setTestingCheckout(false);
+    }
+  };
+
+  const updateAutoCheckout = (patch: Partial<AutoCheckoutConfig>) => {
+    const current = ui.settings.autoCheckout ?? {
+      enabled: false,
+      fullName: "",
+      idCardNumber: "",
+      phoneNumber: "",
+      email: "",
+      timeSlotPreference: "earliest",
+      paymentMethod: "alipay",
+    };
+    void saveSettings({
+      autoCheckout: { ...current, ...patch },
+    });
+  };
+
   useEffect(() => {
     if (!ui.ready || deliveryDirty) return;
     setDeliveryDraft(ui.settings.deliveryRegion ?? { state: "", city: "", district: "" });
@@ -716,40 +758,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="hidden min-w-0 flex-1 items-center justify-center gap-2 min-[860px]:flex">
-              <span className="truncate text-sm text-muted-foreground">
-                本软件已开源，欢迎下载最新版体验
-              </span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="rounded-lg"
-                    aria-label="在 GitHub 查看开源项目并下载最新版"
-                    onClick={() => void openProjectPage()}
-                  >
-                    <GithubBrandIcon />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>GitHub 项目与最新版下载</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="rounded-lg px-2 text-sm text-muted-foreground hover:text-foreground"
-                    aria-label="在 X 关注 @suversal，获取更多信息"
-                    onClick={() => void openAuthorPage()}
-                  >
-                    <XBrandIcon />
-                    @suversal
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>关注我获取更多信息</TooltipContent>
-              </Tooltip>
-            </div>
+            <div className="flex-1" />
 
             <div className="flex shrink-0 items-center gap-2.5">
               <div className="status-pill" role="status" aria-live="polite">
@@ -1095,7 +1104,7 @@ export default function App() {
               </section>
             </div>
 
-            <aside className="flex min-h-0 flex-col gap-4">
+            <aside className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
               <section className="grid grid-cols-4 gap-2" aria-label="监控概览">
                 <div className="metric-tile">
                   <Radar className="size-4 text-primary" aria-hidden="true" />
@@ -1311,6 +1320,227 @@ export default function App() {
                 <Button variant="outline" className="mt-3 h-10 w-full rounded-xl border-border/70 bg-background/30" onClick={() => void testNotify()}>
                   <BellRing aria-hidden="true" /> 测试提醒与跳转
                 </Button>
+              </section>
+
+              <section className="surface-panel shrink-0 p-4 border border-amber-500/20 bg-amber-500/[0.02]" aria-labelledby="auto-checkout-title">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="section-icon bg-amber-500/15 text-amber-500" aria-hidden="true">
+                      <Zap className="size-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 id="auto-checkout-title" className="text-sm font-semibold text-foreground">
+                          自动下单 / 极速抢单
+                        </h2>
+                        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                          Beta
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        有货时毫秒级自动加购、锁定门店、抢预约时段
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    id="auto-checkout-toggle"
+                    aria-label="开启自动下单"
+                    checked={ui.settings.autoCheckout?.enabled ?? false}
+                    onCheckedChange={(enabled) => {
+                      updateAutoCheckout({ enabled });
+                      if (enabled) setAutoCheckoutOpen(true);
+                    }}
+                  />
+                </div>
+
+                <div className="mt-3 flex items-center justify-between">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => setAutoCheckoutOpen((prev) => !prev)}
+                  >
+                    {autoCheckoutOpen || ui.settings.autoCheckout?.enabled ? (
+                      <>
+                        <ChevronUp className="mr-1 size-3.5" /> 收起抢单参数
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="mr-1 size-3.5" /> 展开抢单参数
+                      </>
+                    )}
+                  </Button>
+                  <span className="text-[11px] text-muted-foreground">
+                    {ui.settings.autoCheckout?.enabled ? (
+                      <span className="text-emerald-500 font-medium">● 抢单已就绪</span>
+                    ) : (
+                      "未启用"
+                    )}
+                  </span>
+                </div>
+
+                {(autoCheckoutOpen || ui.settings.autoCheckout?.enabled) && (
+                  <div className="mt-3 space-y-3 border-t border-border/50 pt-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="field-group">
+                        <Label htmlFor="checkout-fullname" className="control-label text-xs">
+                          取货人姓名
+                        </Label>
+                        <Input
+                          id="checkout-fullname"
+                          className="control-surface h-8 select-text text-xs"
+                          placeholder="真实姓名"
+                          value={nameValue}
+                          onChange={(e) => setNameDraft(e.target.value)}
+                          onBlur={() => {
+                            const trimmed = nameValue.trim();
+                            setNameDraft(null);
+                            updateAutoCheckout({ fullName: trimmed });
+                          }}
+                        />
+                      </div>
+                      <div className="field-group">
+                        <Label htmlFor="checkout-phone" className="control-label text-xs">
+                          手机号码
+                        </Label>
+                        <Input
+                          id="checkout-phone"
+                          className="control-surface h-8 select-text text-xs"
+                          placeholder="接收提货码短信"
+                          value={phoneValue}
+                          onChange={(e) => setPhoneDraft(e.target.value)}
+                          onBlur={() => {
+                            const trimmed = phoneValue.trim();
+                            setPhoneDraft(null);
+                            updateAutoCheckout({ phoneNumber: trimmed });
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="field-group">
+                      <Label htmlFor="checkout-idcard" className="control-label text-xs">
+                        身份证后 4 位 <span className="text-[10px] font-normal text-muted-foreground">(大陆自提实名核验)</span>
+                      </Label>
+                      <Input
+                        id="checkout-idcard"
+                        className="control-surface h-8 select-text text-xs uppercase"
+                        placeholder="例如：1234 或 123X"
+                        maxLength={4}
+                        value={idValue}
+                        onChange={(e) => setIdDraft(e.target.value.toUpperCase().slice(0, 4))}
+                        onBlur={() => {
+                          const trimmed = idValue.trim().toUpperCase().slice(0, 4);
+                          setIdDraft(null);
+                          updateAutoCheckout({ idCardNumber: trimmed });
+                        }}
+                      />
+                    </div>
+
+                    <div className="field-group">
+                      <Label htmlFor="checkout-email" className="control-label text-xs">
+                        电子邮箱 <span className="text-[10px] font-normal text-muted-foreground">(接收订单凭证)</span>
+                      </Label>
+                      <Input
+                        id="checkout-email"
+                        className="control-surface h-8 select-text text-xs"
+                        placeholder="例如：name@example.com"
+                        value={emailValue}
+                        onChange={(e) => setEmailDraft(e.target.value)}
+                        onBlur={() => {
+                          const trimmed = emailValue.trim();
+                          setEmailDraft(null);
+                          updateAutoCheckout({ email: trimmed });
+                        }}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="field-group">
+                        <Label className="control-label text-xs">取货时段偏好</Label>
+                        <Select
+                          value={ui.settings.autoCheckout?.timeSlotPreference || "earliest"}
+                          onValueChange={(val) => updateAutoCheckout({ timeSlotPreference: val })}
+                        >
+                          <SelectTrigger className="control-surface h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="earliest">优先最早可用时段</SelectItem>
+                            <SelectItem value="any_today">当天任意可用时段</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="field-group">
+                        <Label className="control-label text-xs">首选支付方式</Label>
+                        <Select
+                          value={ui.settings.autoCheckout?.paymentMethod || "alipay"}
+                          onValueChange={(val) => updateAutoCheckout({ paymentMethod: val })}
+                        >
+                          <SelectTrigger className="control-surface h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="alipay">支付宝</SelectItem>
+                            <SelectItem value="wechat">微信支付</SelectItem>
+                            <SelectItem value="none">手动选择</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 flex-1 rounded-lg border-amber-500/35 bg-amber-500/10 text-xs text-amber-600 hover:bg-amber-500/20 dark:text-amber-400 font-medium"
+                          onClick={() => void handleCopyScript()}
+                        >
+                          {copiedScript ? (
+                            <>
+                              <Check className="mr-1.5 size-3.5 text-emerald-500" />
+                              已复制油猴抢单脚本！
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="mr-1.5 size-3.5" />
+                              复制专属抢单油猴脚本
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                          disabled={testingCheckout}
+                          onClick={() => void handleTestCheckout()}
+                        >
+                          <ExternalLink className="mr-1 size-3.5" />
+                          测试直达通道
+                        </Button>
+                      </div>
+
+                      {copiedScript && (
+                        <p className="rounded-md bg-emerald-500/10 p-2 text-[11px] leading-4 text-emerald-600 dark:text-emerald-400">
+                          ✓ 已根据您的最新姓名与身份证信息生成专属脚本！请在 Chrome 油猴 (Tampermonkey) 中新建脚本并粘贴保存，监控到有货时将全自动接管。
+                        </p>
+                      )}
+
+                      {scriptCopyError && (
+                        <p className="text-[11px] text-destructive">{scriptCopyError}</p>
+                      )}
+
+                      <p className="text-[10px] leading-4 text-muted-foreground">
+                        🛡️ <strong>安全保障</strong>：身份信息仅保存在本机配置文件中，绝不上云；抢单流程到达最终付款二维码页面后，需手机扫码确认金额，绝无自动代扣款风险。
+                      </p>
+                    </div>
+                  </div>
+                )}
               </section>
 
               <section className="surface-panel flex min-h-[150px] flex-1 flex-col overflow-hidden" aria-labelledby="activity-log-title">

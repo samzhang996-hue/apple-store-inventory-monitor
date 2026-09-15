@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  AutoCheckoutConfig,
   Category,
   CategoryOption,
   DeliveryLocalities,
@@ -70,6 +71,16 @@ export interface UiState {
   updateInstalled: boolean;
 }
 
+const DEFAULT_AUTO_CHECKOUT: AutoCheckoutConfig = {
+  enabled: false,
+  fullName: "",
+  idCardNumber: "",
+  phoneNumber: "",
+  email: "",
+  timeSlotPreference: "earliest",
+  paymentMethod: "alipay",
+};
+
 const DEFAULT_SETTINGS: Settings = {
   locale: "zh_CN",
   targets: [],
@@ -79,6 +90,7 @@ const DEFAULT_SETTINGS: Settings = {
   productBarkUrls: {},
   soundEnabled: true,
   openOnHit: "bag",
+  autoCheckout: DEFAULT_AUTO_CHECKOUT,
 };
 
 let state: UiState = {
@@ -562,4 +574,26 @@ export async function openInStockLogDir(): Promise<void> {
     pushLog(`打开有货记录目录失败：${String(err)}`);
   }
 }
+
+/** 获取生成的专属抢单油猴脚本内容。 */
+export async function getAutoCheckoutScript(): Promise<string> {
+  try {
+    return await invoke<string>("get_auto_checkout_script");
+  } catch (err) {
+    pushLog(`获取抢单脚本失败：${String(err)}`);
+    throw err;
+  }
+}
+
+/** 测试自动下单/抢单直达通道。 */
+export async function testAutoCheckout(): Promise<void> {
+  try {
+    await invoke("test_auto_checkout");
+    pushLog("⚡ 已唤起浏览器进入直达抢单通道。");
+  } catch (err) {
+    pushLog(`测试抢单通道失败：${String(err)}`);
+    throw err;
+  }
+}
+
 

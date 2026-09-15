@@ -167,6 +167,40 @@ impl ConfigError {
 /// 字段名跨 IPC 边界要和前端对齐，所以统一小驼峰，与 [`Target`]、
 /// [`crate::model::Product`] 等类型一致。
 ///
+/// 自动下单/极速抢单设置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AutoCheckoutConfig {
+    /// 是否开启自动下单/抢单辅助
+    pub enabled: bool,
+    /// 取货人真实姓名
+    pub full_name: String,
+    /// 取货人身份证后 4 位（中国大陆到店自提实名核验）
+    pub id_card_number: String,
+    /// 取货人手机号码
+    pub phone_number: String,
+    /// 接收订单信息的电子邮箱
+    pub email: String,
+    /// 预约取货时段偏好策略（"earliest" 最早可用时段，"any_today" 当天任意时段）
+    pub time_slot_preference: String,
+    /// 首选支付方式（"alipay" 支付宝，"wechat" 微信支付，"none" 手动选择）
+    pub payment_method: String,
+}
+
+impl Default for AutoCheckoutConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            full_name: String::new(),
+            id_card_number: String::new(),
+            phone_number: String::new(),
+            email: String::new(),
+            time_slot_preference: "earliest".into(),
+            payment_method: "alipay".into(),
+        }
+    }
+}
+
 /// 容器级 `#[serde(default)]` 是有意加的：磁盘上的文件可能来自旧版本、少几个
 /// 字段。缺字段应当取**默认值**，而不是取该类型的零值 —— 否则一份老配置读上来
 /// 会把 `soundEnabled` 变成 `false`，用户什么都没改，提示音却自己关了。
@@ -190,6 +224,9 @@ pub struct Settings {
     /// 有货时自动打开的页面；旧字段 `openBagOnHit` 通过别名兼容。
     #[serde(alias = "openBagOnHit")]
     pub open_on_hit: OpenOnHit,
+    /// 自动下单/极速抢单设置。
+    #[serde(default)]
+    pub auto_checkout: AutoCheckoutConfig,
 }
 
 /// 内置地区表里的第一个 locale，作为兜底取值。
@@ -210,6 +247,7 @@ impl Default for Settings {
             product_bark_urls: BTreeMap::new(),
             sound_enabled: true,
             open_on_hit: OpenOnHit::Bag,
+            auto_checkout: AutoCheckoutConfig::default(),
         }
     }
 }
@@ -655,6 +693,7 @@ impl LegacySettings {
                 Some(false) => OpenOnHit::None,
                 None => fallback.open_on_hit,
             },
+            auto_checkout: AutoCheckoutConfig::default(),
         };
         settings.normalize();
         settings
@@ -848,5 +887,13 @@ mod tests {
         );
         // 新版必须和 Go 版分家，否则两个版本会互相覆盖对方的配置。
         assert_ne!(SETTINGS_FILE, LEGACY_SETTINGS_FILE);
+    }
+
+    #[test]
+    fn 缺失自动下单配置时自动填充默认值() {
+        let s: Settings = serde_json::from_str(r#"{"locale":"zh_CN"}"#).expect("解析设置");
+        assert!(!s.auto_checkout.enabled);
+        assert_eq!(s.auto_checkout.payment_method, "alipay");
+        assert_eq!(s.auto_checkout.time_slot_preference, "earliest");
     }
 }

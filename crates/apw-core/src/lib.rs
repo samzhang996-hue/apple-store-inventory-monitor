@@ -20,9 +20,11 @@
 
 pub mod apple;
 pub mod apple_catalog;
+pub mod auto_checkout;
 pub mod catalog;
 pub mod config;
 pub mod in_stock_logger;
 pub mod model;
 pub mod notify;
 pub mod watcher;
+

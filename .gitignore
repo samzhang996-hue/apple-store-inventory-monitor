@@ -11,6 +11,7 @@ dist-ssr
 # 日志
 logs
 *.log
+*.csv
 npm-debug.log*
 pnpm-debug.log*
 

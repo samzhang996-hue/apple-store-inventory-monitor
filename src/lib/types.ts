@@ -120,6 +120,17 @@ export interface Store {
 /** 检测到有货时自动打开的页面，与 Rust 侧 `OpenOnHit` 一一对应。 */
 export type OpenOnHit = "none" | "bag" | "product";
 
+/** 自动下单/极速抢单设置，与 Rust 侧 AutoCheckoutConfig 一一对应。 */
+export interface AutoCheckoutConfig {
+  enabled: boolean;
+  fullName: string;
+  idCardNumber: string;
+  phoneNumber: string;
+  email: string;
+  timeSlotPreference: string;
+  paymentMethod: string;
+}
+
 export interface Settings {
   locale: string;
   targets: Target[];
@@ -130,6 +141,7 @@ export interface Settings {
   barkUrl: string;
   soundEnabled: boolean;
   openOnHit: OpenOnHit;
+  autoCheckout: AutoCheckoutConfig;
 }
 
 /** 监控目标的唯一键，与 Rust 侧 Target::key 的构成保持一致。 */

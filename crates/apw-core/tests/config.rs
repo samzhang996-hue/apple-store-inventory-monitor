@@ -94,6 +94,7 @@ fn 样例设置() -> Settings {
             .collect(),
         sound_enabled: false,
         open_on_hit: OpenOnHit::Product,
+        auto_checkout: apw_core::config::AutoCheckoutConfig::default(),
     }
 }
 
@@ -504,13 +505,14 @@ fn 设置的线上格式是小驼峰() {
         "productBarkUrls",
         "soundEnabled",
         "openOnHit",
+        "autoCheckout",
     ] {
         assert!(obj.contains_key(key), "缺少字段 {key}：{value}");
     }
     assert!(!obj.contains_key("interval_seconds"), "不该有蛇形字段");
     assert_eq!(obj.get("openOnHit"), Some(&serde_json::json!("product")));
     assert!(!obj.contains_key("openBagOnHit"));
-    assert_eq!(obj.len(), 8);
+    assert_eq!(obj.len(), 9);
 }
 
 #[test]
