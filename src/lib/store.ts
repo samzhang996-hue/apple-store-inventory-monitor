@@ -544,3 +544,22 @@ export function openProjectPage(): Promise<void> {
 export function openAuthorPage(): Promise<void> {
   return openCommunityPage("https://x.com/suversal", "X 主页");
 }
+
+/** 打开系统默认表格工具（如 Excel、WPS、Numbers）查看有货记录。 */
+export async function openInStockLog(): Promise<void> {
+  try {
+    await invoke("open_in_stock_log");
+  } catch (err) {
+    pushLog(`打开有货表格失败：${String(err)}`);
+  }
+}
+
+/** 打开有货记录所在文件夹。 */
+export async function openInStockLogDir(): Promise<void> {
+  try {
+    await invoke("open_in_stock_log_dir");
+  } catch (err) {
+    pushLog(`打开有货记录目录失败：${String(err)}`);
+  }
+}
+

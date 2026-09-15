@@ -4,8 +4,12 @@ import {
   Activity,
   AlertTriangle,
   BellRing,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   Download,
+  FileSpreadsheet,
+  FolderOpen,
   MapPin,
   PackageCheck,
   PackageX,
@@ -73,6 +77,8 @@ import {
   loadWatchBandChoices,
   loadWatchBandSizes,
   openAuthorPage,
+  openInStockLog,
+  openInStockLogDir,
   openProjectPage,
   openReleasePage,
   openTargetProduct,
@@ -484,6 +490,7 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [ui.running]);
 
+  const [isCreateCollapsed, setIsCreateCollapsed] = useState(false);
   const [storeNumbers, setStoreNumbers] = useState<string[]>([]);
   const [partNumbers, setPartNumbers] = useState<string[]>([]);
   const [isAdding, setIsAdding] = useState(false);
@@ -821,7 +828,7 @@ export default function App() {
           <div className="grid min-h-0 flex-1 gap-4 min-[980px]:grid-cols-[minmax(0,1fr)_22rem]">
             <div className="flex min-h-0 flex-col gap-4">
               <section className="surface-panel shrink-0 p-4" aria-labelledby="create-monitor-title">
-                <div className="mb-4 flex items-start justify-between gap-4">
+                <div className={`flex items-start justify-between gap-4 ${isCreateCollapsed ? "" : "mb-4"}`}>
                   <div>
                     <div className="eyebrow">
                       <Plus className="size-3.5" aria-hidden="true" /> 新建监控
@@ -830,133 +837,156 @@ export default function App() {
                       选择想要追踪的门店与型号
                     </h2>
                   </div>
-                  {hasCompleteSelection && (
-                    <Badge className="border-primary/20 bg-primary/10 text-primary" variant="outline">
-                      {storeNumbers.length} × {partNumbers.length}
-                    </Badge>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-[0.9fr_0.9fr_1.3fr_2fr]">
-                  <div className="field-group">
-                    <Label className="control-label">
-                      <MapPin className="size-3.5" aria-hidden="true" /> 地区
-                    </Label>
-                    <Combobox
-                      className="control-surface w-full"
-                      options={ui.regions.map((region) => ({ value: region.locale, label: region.title }))}
-                      value={ui.settings.locale}
-                      onChange={(locale) => {
-                        setStoreNumbers([]);
-                        setPartNumbers([]);
-                        void changeLocale(locale);
-                      }}
-                      placeholder="选择地区"
-                      searchPlaceholder="搜索地区…"
-                      emptyText="没有匹配的地区"
-                      disabled={isAdding}
-                    />
-                  </div>
-
-                  <div className="field-group">
-                    <Label className="control-label">
-                      <Smartphone className="size-3.5" aria-hidden="true" /> 品类
-                    </Label>
-                    <Combobox
-                      className="control-surface w-full"
-                      options={ui.categories.map((category) => ({ value: category.value, label: category.title }))}
-                      value={ui.category}
-                      onChange={(value) => {
-                        setPartNumbers([]);
-                        setCategory(value as Category);
-                      }}
-                      placeholder="选择品类"
-                      searchPlaceholder="搜索品类…"
-                      emptyText="没有匹配的品类"
-                      disabled={isAdding || ui.categories.length === 0}
-                    />
-                  </div>
-
-                  <div className="field-group">
-                    <Label className="control-label">
-                      <MapPin className="size-3.5" aria-hidden="true" /> 门店
-                      <span className="font-normal text-muted-foreground">可多选</span>
-                    </Label>
-                    <MultiCombobox
-                      key={`stores-${ui.settings.locale}`}
-                      className="control-surface w-full"
-                      options={storeOptions}
-                      values={storeNumbers}
-                      onChange={setStoreNumbers}
-                      placeholder="选择自提门店"
-                      searchPlaceholder="搜索门店…"
-                      emptyText="没有匹配的门店"
-                      selectionUnit="家门店"
-                      disabled={isAdding || storeOptions.length === 0}
-                    />
-                  </div>
-
-                  <div className="field-group">
-                    <Label className="control-label">
-                      <PackageCheck className="size-3.5" aria-hidden="true" /> 型号
-                      <span className="font-normal text-muted-foreground">可多选</span>
-                    </Label>
-                    <MultiCombobox
-                      key={`products-${ui.settings.locale}-${ui.category}`}
-                      className="control-surface w-full"
-                      options={productOptions}
-                      values={partNumbers}
-                      onChange={setPartNumbers}
-                      placeholder="选择型号"
-                      searchPlaceholder="搜索型号…"
-                      emptyText="没有匹配的型号"
-                      selectionUnit="个型号"
-                      disabled={isAdding || productOptions.length === 0}
-                    />
-                    {ui.category === "watch" ? (
-                      <p className="text-[11px] leading-4 text-muted-foreground">
-                        Watch 会先使用目录默认表带查询；也可在监控列表中按官网款式、颜色和尺码选择精确表带。
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border/55 pt-3">
-                  <p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground" role="status">
-                    {hasCompleteSelection
-                      ? `将新增 ${pendingTargets.length} 条监控${duplicateCount > 0 ? `，跳过 ${duplicateCount} 条已有组合` : ""}`
-                      : "选择门店和型号后，系统会按全部组合创建监控。"}
-                  </p>
                   <div className="flex items-center gap-2">
+                    {hasCompleteSelection && (
+                      <Badge className="border-primary/20 bg-primary/10 text-primary" variant="outline">
+                        {storeNumbers.length} × {partNumbers.length}
+                      </Badge>
+                    )}
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          variant="outline"
-                          size="icon-lg"
-                          className="rounded-xl border-border/70 bg-background/40"
-                          aria-label="从 Apple 官网更新当前品类的型号列表"
-                          disabled={ui.refreshing}
-                          onClick={() => void refreshProducts()}
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="size-8 rounded-lg text-muted-foreground hover:text-foreground"
+                          onClick={() => setIsCreateCollapsed((prev) => !prev)}
+                          aria-label={isCreateCollapsed ? "展开新建监控面板" : "折叠新建监控面板"}
                         >
-                          <RefreshCw className={ui.refreshing ? "animate-spin" : undefined} />
+                          {isCreateCollapsed ? (
+                            <ChevronDown className="size-4" aria-hidden="true" />
+                          ) : (
+                            <ChevronUp className="size-4" aria-hidden="true" />
+                          )}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>从 Apple 官网更新当前品类的型号列表</TooltipContent>
+                      <TooltipContent>{isCreateCollapsed ? "展开面板" : "折叠面板"}</TooltipContent>
                     </Tooltip>
-                    <Button
-                      className="h-10 min-w-28 rounded-xl px-4"
-                      onClick={() => void onAdd()}
-                      disabled={!canAdd}
-                    >
-                      <Plus aria-hidden="true" />
-                      {isAdding
-                        ? "添加中…"
-                        : canAdd
-                          ? `添加 ${pendingTargets.length} 项`
-                          : hasCompleteSelection
-                            ? "已在列表中"
-                            : "添加监控"}
-                    </Button>
+                  </div>
+                </div>
+
+                <div className={isCreateCollapsed ? "hidden" : undefined}>
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-[0.9fr_0.9fr_1.3fr_2fr]">
+                    <div className="field-group">
+                      <Label className="control-label">
+                        <MapPin className="size-3.5" aria-hidden="true" /> 地区
+                      </Label>
+                      <Combobox
+                        className="control-surface w-full"
+                        options={ui.regions.map((region) => ({ value: region.locale, label: region.title }))}
+                        value={ui.settings.locale}
+                        onChange={(locale) => {
+                          setStoreNumbers([]);
+                          setPartNumbers([]);
+                          void changeLocale(locale);
+                        }}
+                        placeholder="选择地区"
+                        searchPlaceholder="搜索地区…"
+                        emptyText="没有匹配的地区"
+                        disabled={isAdding}
+                      />
+                    </div>
+
+                    <div className="field-group">
+                      <Label className="control-label">
+                        <Smartphone className="size-3.5" aria-hidden="true" /> 品类
+                      </Label>
+                      <Combobox
+                        className="control-surface w-full"
+                        options={ui.categories.map((category) => ({ value: category.value, label: category.title }))}
+                        value={ui.category}
+                        onChange={(value) => {
+                          setPartNumbers([]);
+                          setCategory(value as Category);
+                        }}
+                        placeholder="选择品类"
+                        searchPlaceholder="搜索品类…"
+                        emptyText="没有匹配的品类"
+                        disabled={isAdding || ui.categories.length === 0}
+                      />
+                    </div>
+
+                    <div className="field-group">
+                      <Label className="control-label">
+                        <MapPin className="size-3.5" aria-hidden="true" /> 门店
+                        <span className="font-normal text-muted-foreground">可多选</span>
+                      </Label>
+                      <MultiCombobox
+                        key={`stores-${ui.settings.locale}`}
+                        className="control-surface w-full"
+                        options={storeOptions}
+                        values={storeNumbers}
+                        onChange={setStoreNumbers}
+                        placeholder="选择自提门店"
+                        searchPlaceholder="搜索门店…"
+                        emptyText="没有匹配的门店"
+                        selectionUnit="家门店"
+                        disabled={isAdding || storeOptions.length === 0}
+                      />
+                    </div>
+
+                    <div className="field-group">
+                      <Label className="control-label">
+                        <PackageCheck className="size-3.5" aria-hidden="true" /> 型号
+                        <span className="font-normal text-muted-foreground">可多选</span>
+                      </Label>
+                      <MultiCombobox
+                        key={`products-${ui.settings.locale}-${ui.category}`}
+                        className="control-surface w-full"
+                        options={productOptions}
+                        values={partNumbers}
+                        onChange={setPartNumbers}
+                        placeholder="选择型号"
+                        searchPlaceholder="搜索型号…"
+                        emptyText="没有匹配的型号"
+                        selectionUnit="个型号"
+                        disabled={isAdding || productOptions.length === 0}
+                      />
+                      {ui.category === "watch" ? (
+                        <p className="text-[11px] leading-4 text-muted-foreground">
+                          Watch 会先使用目录默认表带查询；也可在监控列表中按官网款式、颜色和尺码选择精确表带。
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border/55 pt-3">
+                    <p className="min-w-0 flex-1 text-xs leading-5 text-muted-foreground" role="status">
+                      {hasCompleteSelection
+                        ? `将新增 ${pendingTargets.length} 条监控${duplicateCount > 0 ? `，跳过 ${duplicateCount} 条已有组合` : ""}`
+                        : "选择门店和型号后，系统会按全部组合创建监控。"}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon-lg"
+                            className="rounded-xl border-border/70 bg-background/40"
+                            aria-label="从 Apple 官网更新当前品类的型号列表"
+                            disabled={ui.refreshing}
+                            onClick={() => void refreshProducts()}
+                          >
+                            <RefreshCw className={ui.refreshing ? "animate-spin" : undefined} />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>从 Apple 官网更新当前品类的型号列表</TooltipContent>
+                      </Tooltip>
+                      <Button
+                        className="h-10 min-w-28 rounded-xl px-4"
+                        onClick={() => void onAdd()}
+                        disabled={!canAdd}
+                      >
+                        <Plus aria-hidden="true" />
+                        {isAdding
+                          ? "添加中…"
+                          : canAdd
+                            ? `添加 ${pendingTargets.length} 项`
+                            : hasCompleteSelection
+                              ? "已在列表中"
+                              : "添加监控"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </section>
@@ -1289,7 +1319,39 @@ export default function App() {
                     <SquareTerminal className="size-4 text-muted-foreground" aria-hidden="true" />
                     <h2 id="activity-log-title" className="text-sm font-semibold">活动日志</h2>
                   </div>
-                  <span className="text-[11px] tabular-nums text-muted-foreground">{ui.logs.length} 条</span>
+                  <div className="flex items-center gap-2">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="size-6 text-muted-foreground hover:text-foreground"
+                          aria-label="打开有货记录 Excel 表格"
+                          onClick={() => void openInStockLog()}
+                        >
+                          <FileSpreadsheet className="size-3.5" aria-hidden="true" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>打开有货记录 Excel 表格</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          className="size-6 text-muted-foreground hover:text-foreground"
+                          aria-label="打开有货表格所在目录"
+                          onClick={() => void openInStockLogDir()}
+                        >
+                          <FolderOpen className="size-3.5" aria-hidden="true" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>打开有货表格所在目录</TooltipContent>
+                    </Tooltip>
+                    <span className="text-[11px] tabular-nums text-muted-foreground">{ui.logs.length} 条</span>
+                  </div>
                 </div>
                 <ScrollArea className="min-h-0 flex-1 p-3.5">
                   <pre className="font-mono text-[11px] leading-[1.65] whitespace-pre-wrap text-muted-foreground select-text">

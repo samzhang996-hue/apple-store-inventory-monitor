@@ -726,6 +726,49 @@ fn open_target_product(app: AppHandle, target: Target) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// 用系统默认表格工具（如 Excel、WPS、Numbers）打开有货记录文件。
+#[tauri::command]
+fn open_in_stock_log(app: AppHandle) -> Result<(), String> {
+    use std::io::Write;
+    use tauri_plugin_opener::OpenerExt;
+    let path = apw_core::in_stock_logger::get_log_file_path();
+    if !path.exists() {
+        let dir = apw_core::in_stock_logger::get_log_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&path)
+        {
+            let _ = file.write_all(b"\xEF\xBB\xBF");
+            let header_line = apw_core::in_stock_logger::HEADERS.join(",") + "\r\n";
+            let _ = file.write_all(header_line.as_bytes());
+        }
+    }
+    app.opener()
+        .open_path(path.to_string_lossy().as_ref(), None::<&str>)
+        .map_err(|e| format!("打开日志文件失败：{e}"))
+}
+
+/// 打开有货记录所在目录。
+#[tauri::command]
+fn open_in_stock_log_dir(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = apw_core::in_stock_logger::get_log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    app.opener()
+        .open_path(dir.to_string_lossy().as_ref(), None::<&str>)
+        .map_err(|e| format!("打开日志目录失败：{e}"))
+}
+
+/// 获取当前有货记录文件完整绝对路径。
+#[tauri::command]
+fn get_in_stock_log_path() -> Result<String, String> {
+    Ok(apw_core::in_stock_logger::get_log_file_path()
+        .to_string_lossy()
+        .to_string())
+}
+
 /// 手动测试提醒和首个目标的跳转，便于提前验证实际操作链路。
 #[tauri::command]
 async fn test_notify(app: AppHandle) -> Result<(), String> {
@@ -891,28 +934,53 @@ async fn pump_events(app: AppHandle, mut events: tokio::sync::mpsc::Receiver<Eve
                 }
             }
 
+            let mut actions = Vec::new();
+            if settings.sound_enabled {
+                actions.push("提示音");
+            }
+            if !bark_url.trim().is_empty() {
+                actions.push(if has_product_bark {
+                    "Bark（型号专属）"
+                } else {
+                    "Bark"
+                });
+            }
+            if let Some(destination) = opened_destination {
+                match destination {
+                    OpenOnHit::Bag => actions.push("已打开购物袋"),
+                    OpenOnHit::Product => actions.push("已打开商品页"),
+                    OpenOnHit::None => {}
+                }
+            }
+
+            // 保存详细有货记录到 Excel 文件
+            let purchase_url = target_purchase_url(&app, target);
+            match apw_core::in_stock_logger::record_in_stock(
+                target,
+                state.pickup_details.as_ref(),
+                &actions,
+                settings.interval_seconds,
+                state.consecutive_failures,
+                purchase_url.as_deref(),
+            ) {
+                Ok(path) => {
+                    let _ = app.emit(
+                        NOTICE_CHANNEL,
+                        format!("已记录有货详情至 Excel 文件：{}", path.display()),
+                    );
+                }
+                Err(err) => {
+                    let _ = app.emit(
+                        NOTICE_CHANNEL,
+                        format!("保存有货记录到 Excel 文件失败：{err}"),
+                    );
+                }
+            }
+
             if let Err(err) = dispatch_notification(&app, notification, &bark_url).await {
                 // 提醒没发出去是遗憾，但绝不能让监控本身停下来。
                 let _ = app.emit(NOTICE_CHANNEL, format!("发送提醒时出错：{err}"));
             } else {
-                let mut actions = Vec::new();
-                if settings.sound_enabled {
-                    actions.push("提示音");
-                }
-                if !bark_url.trim().is_empty() {
-                    actions.push(if has_product_bark {
-                        "Bark（型号专属）"
-                    } else {
-                        "Bark"
-                    });
-                }
-                if let Some(destination) = opened_destination {
-                    match destination {
-                        OpenOnHit::Bag => actions.push("已打开购物袋"),
-                        OpenOnHit::Product => actions.push("已打开商品页"),
-                        OpenOnHit::None => {}
-                    }
-                }
                 if actions.is_empty() {
                     continue;
                 }
@@ -1140,6 +1208,9 @@ pub fn run() {
             is_running,
             test_notify,
             open_target_product,
+            open_in_stock_log,
+            open_in_stock_log_dir,
+            get_in_stock_log_path,
             check_for_update,
             install_update,
         ])
