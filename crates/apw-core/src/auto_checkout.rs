@@ -2,17 +2,19 @@
 //!
 //! 在库存监控命中时，通过自动化脚本在真实浏览器（拥有完整 Apple ID 登录态与
 //! Akamai 安全 Cookie）中执行秒级操作：
-//! 1. 购物袋快速点击结账；
-//! 2. 锁定监控的目标零售店（按门店编号如 R683 或名称匹配）；
-//! 3. 毫秒级抢占最早可用的预约到店取货时间段（Time Slot）；
-//! 4. 自动填写取货人姓名、身份证号、手机号与邮箱（通过 React Synthetic Event 触发）；
-//! 5. 推进至支付页面，选中首选支付方式（支付宝/微信），弹出付款二维码等待扫码。
+//! 1. 自动处理 Apple 官网选配页的前置必选项（跳过换购估价、全款结账、跳过 AppleCare+）；
+//! 2. 激活并点击加购按钮入袋；
+//! 3. 购物袋快速点击结账；
+//! 4. 智能匹配并锁定监控的目标零售店（按门店编号如 R683 或名称模糊匹配）；
+//! 5. 毫秒级抢占最早可用的预约到店取货时间段（Time Slot）；
+//! 6. 自动填写取货人姓名、身份证号、手机号与邮箱（通过 React Synthetic Event 触发）；
+//! 7. 推进至支付页面，选中首选支付方式（支付宝/微信），弹出付款二维码等待扫码。
 
 use crate::config::AutoCheckoutConfig;
 use crate::model::Target;
 
 /// 生成专为当前配置定制的 Tampermonkey 油猴抢购脚本。
-pub fn generate_userscript(config: &AutoCheckoutConfig, target: Option<&Target>) -> String {
+pub fn generate_userscript(config: &AutoCheckoutConfig, targets: &[Target]) -> String {
     let full_name = serde_json::to_string(&config.full_name).unwrap_or_else(|_| "\"\"".into());
     let id_card = serde_json::to_string(&config.id_card_number).unwrap_or_else(|_| "\"\"".into());
     let phone = serde_json::to_string(&config.phone_number).unwrap_or_else(|_| "\"\"".into());
@@ -20,21 +22,27 @@ pub fn generate_userscript(config: &AutoCheckoutConfig, target: Option<&Target>)
     let payment_method = serde_json::to_string(&config.payment_method).unwrap_or_else(|_| "\"alipay\"".into());
     let time_pref = serde_json::to_string(&config.time_slot_preference).unwrap_or_else(|_| "\"earliest\"".into());
 
-    let (store_number, store_title, part_number) = match target {
-        Some(t) => (
-            serde_json::to_string(&t.store_number).unwrap_or_else(|_| "\"\"".into()),
-            serde_json::to_string(&t.store_title).unwrap_or_else(|_| "\"\"".into()),
-            serde_json::to_string(&t.part_number).unwrap_or_else(|_| "\"\"".into()),
-        ),
-        None => ("\"\"".into(), "\"\"".into(), "\"\"".into()),
-    };
+    let mut store_list = Vec::new();
+    let mut seen_stores = std::collections::HashSet::new();
+    for t in targets {
+        if seen_stores.insert(t.store_number.clone()) {
+            store_list.push(serde_json::json!({
+                "number": t.store_number,
+                "title": t.store_title,
+            }));
+        }
+    }
+    let target_stores_json = serde_json::to_string(&store_list).unwrap_or_else(|_| "[]".into());
+
+    let target_parts: Vec<&str> = targets.iter().map(|t| t.part_number.as_str()).collect();
+    let target_parts_json = serde_json::to_string(&target_parts).unwrap_or_else(|_| "[]".into());
 
     format!(
 r#"// ==UserScript==
 // @name         Apple Store 极速自动抢单与结账助手（果到雷达专享版）
 // @namespace    https://github.com/samzhang996-hue/apple-store-inventory-monitor
-// @version      1.0.0
-// @description  到店取货库存命中后，毫秒级自动加购、锁定门店、抢占预约时段、填充身份信息并直达支付二维码页面。
+// @version      1.1.0
+// @description  到店取货库存命中后，毫秒级自动跳过折抵与AppleCare、加购、锁定门店、抢占预约时段、填充身份信息并直达支付二维码页面。
 // @author       果到雷达 (Apple Store Inventory Monitor)
 // @match        https://www.apple.com.cn/shop/*
 // @match        https://www.apple.com/hk-zh/shop/*
@@ -56,9 +64,8 @@ r#"// ==UserScript==
         email: {email},
         paymentMethod: {payment_method}, // alipay, wechat, none
         timeSlotPreference: {time_pref}, // earliest, any_today
-        targetStoreNumber: {store_number},
-        targetStoreTitle: {store_title},
-        targetPartNumber: {part_number}
+        targetStores: {target_stores_json},
+        targetParts: {target_parts_json}
     }};
 
     if (!CONFIG.enabled) {{
@@ -70,6 +77,9 @@ r#"// ==UserScript==
 
     // 状态机步骤标记，避免重复点击
     const state = {{
+        selectedTradeIn: false,
+        selectedAppleCare: false,
+        clickedAdd: false,
         clickedCheckout: false,
         selectedPickup: false,
         selectedStore: false,
@@ -136,37 +146,131 @@ r#"// ==UserScript==
         input.dispatchEvent(new Event('blur', {{ bubbles: true }}));
     }}
 
-    // 步骤 1：商品详情页快速加购与加购后浮层极速推进
+    // 辅助：智能模糊匹配零售店
+    function matchStore(card, store) {{
+        if (!card || !store) return false;
+        const text = card.textContent || '';
+        const html = card.innerHTML || '';
+        const num = (store.number || '').trim();
+        if (num && (html.includes(num) || text.includes(num))) {{
+            return true;
+        }}
+        const title = (store.title || '').trim();
+        if (!title) return false;
+        if (text.includes(title)) return true;
+        const cleanTitle = title.includes('-') ? title.split('-').slice(1).join('-').trim() : title;
+        if (cleanTitle && text.includes(cleanTitle)) return true;
+        const subTitle = cleanTitle.replace(/^(北京|上海|天津|重庆|四川|广东|江苏|浙江|山东|湖北|辽宁|陕西|河南|福建|成都|武汉|杭州|南京|广州|深圳|沈阳|大连|无锡|苏州|宁波|厦门|福州|青岛|济南|郑州|长沙|南宁|西安|昆明|贵阳)/, '');
+        if (subTitle && subTitle.length >= 2 && text.includes(subTitle)) return true;
+        return false;
+    }}
+
+    // 步骤 1：商品选配与详情页快速推进（自动跳过折抵与 AppleCare+，秒级加购）
     function handleProductPage() {{
-        // 1.1 加购后弹出的侧边抽屉或浮层，优先点击「结账」或「查看购物袋」
+        // 1.1 加购后弹出的侧边抽屉、配件选配页（step=attach）或浮层，优先点击「结账」或「查看购物袋」
         const overlayProceedBtn = document.querySelector(
-            'button[name="proceed"], button[data-autom="proceed-to-checkout"], button[data-autom="checkout"], a[data-autom="checkout"], button.as-overlay-action, a[href*="/shop/bag"]'
+            'button[name="proceed"], button[data-autom="proceed"], button[data-autom="reviewBag"], button[data-autom="proceed-to-checkout"], button[data-autom="checkout"], a[data-autom="checkout"], a[data-autom="proceed"], button.as-overlay-action, a[href*="/shop/bag"]'
         );
         if (overlayProceedBtn && !overlayProceedBtn.disabled) {{
-            showHUD('商品已入袋，正在极速进入结账...', false);
+            showHUD('商品已入袋，正在极速进入购物袋/结账...', false);
             overlayProceedBtn.click();
             return;
         }}
 
-        // 1.2 主加购按钮（覆盖详情页、选配页及浮动栏）
-        const addBtn = document.querySelector(
-            'button[name="add-to-cart"], button[data-autom="add-to-cart"], button[data-autom="addToCart"], button[id*="add-to-cart"], button[type="submit"].as-purchaseinfo-button, button.as-purchaseinfo-button, .as-buyflow-addtocart button'
-        );
-        if (addBtn && !addBtn.disabled) {{
-            showHUD('检测到目标商品页，正在极速加入购物袋...');
-            addBtn.click();
-            playBeep();
-            // 如果加购后未自动跳转，1.5 秒后保底直跳购物袋推进
-            setTimeout(() => {{
-                if (window.location.href.includes('/shop/buy-') || window.location.href.includes('/shop/product/')) {{
-                    const currentBagBtn = document.querySelector('button[name="proceed"], button[data-autom="proceed-to-checkout"], a[href*="/shop/bag"]');
-                    if (currentBagBtn) {{
-                        currentBagBtn.click();
-                    }} else {{
-                        window.location.href = 'https://www.apple.com.cn/shop/bag';
+        // 若直接进入了配件推荐页 (step=attach)，且存在查看购物袋按钮，直接点击推进
+        if (window.location.search.includes('step=attach')) {{
+            const attachProceedBtn = document.querySelector('button[data-autom="proceed"], button[name="proceed"], a[href*="/shop/bag"]');
+            if (attachProceedBtn && !attachProceedBtn.disabled) {{
+                showHUD('已跳过配件推荐，正在进入购物袋...');
+                attachProceedBtn.click();
+                return;
+            }}
+        }}
+
+        // 1.2 自动选择「不折抵换购」(Apple Trade In)
+        if (!state.selectedTradeIn) {{
+            const tradeInRadio = document.querySelector(
+                'input[data-autom="choose-noTradeIn"], input#noTradeIn, input[value="noTradeIn"], input[name*="tradeup"][value="false"]'
+            );
+            if (tradeInRadio) {{
+                if (!tradeInRadio.checked) {{
+                    showHUD('正在自动选择「不折抵换购」...');
+                    const label = document.querySelector('label[id="noTradeIn_label"], label[for="noTradeIn"]') || tradeInRadio.closest('label') || tradeInRadio;
+                    label.click();
+                    tradeInRadio.click();
+                }}
+                state.selectedTradeIn = true;
+            }} else {{
+                const labels = document.querySelectorAll('label, button, [role="radio"]');
+                for (const el of labels) {{
+                    const text = (el.textContent || '').trim();
+                    if ((text.includes('不折抵换购') || text.includes('无折抵换购') || text.includes('不進行折抵換購') || text.includes('没有要换购')) && !el.classList.contains('as-selected')) {{
+                        el.click();
+                        state.selectedTradeIn = true;
+                        showHUD('已选择「不折抵换购」');
+                        break;
                     }}
                 }}
-            }}, 1500);
+            }}
+        }}
+
+        // 1.3 自动选择「全款 / 一次性付清」（若页面要求选择购买方式）
+        const fullPriceRadio = document.querySelector('input[data-autom*="fullprice"], input[value*="fullprice"], input[value*="full-price"]');
+        if (fullPriceRadio && !fullPriceRadio.checked) {{
+            const label = document.querySelector(`label[for="${{fullPriceRadio.id}}"]`) || fullPriceRadio.closest('label') || fullPriceRadio;
+            label.click();
+            fullPriceRadio.click();
+        }}
+
+        // 1.4 自动跳过「AppleCare+ 服务计划」
+        if (!state.selectedAppleCare) {{
+            const noAppleCareRadio = document.querySelector(
+                'input[data-autom="noapplecare"], input#noapplecare, input[value="noapplecare"], input[name*="applecare"][value*="no"]'
+            );
+            if (noAppleCareRadio) {{
+                if (!noAppleCareRadio.checked) {{
+                    showHUD('正在自动跳过 AppleCare+...');
+                    const acLabel = document.querySelector(`label[for="${{noAppleCareRadio.id}}"], label[for="noapplecare"], .rf-applecare-label`) || noAppleCareRadio.closest('label') || noAppleCareRadio;
+                    acLabel.click();
+                    noAppleCareRadio.click();
+                }}
+                state.selectedAppleCare = true;
+            }} else {{
+                const labels = document.querySelectorAll('label, button, [role="radio"]');
+                for (const el of labels) {{
+                    const text = (el.textContent || '').trim();
+                    if ((text.includes('不加 AppleCare+') || text.includes('不需要 AppleCare+') || text.includes('不添加 AppleCare+')) && !el.classList.contains('as-selected')) {{
+                        el.click();
+                        state.selectedAppleCare = true;
+                        showHUD('已跳过 AppleCare+');
+                        break;
+                    }}
+                }}
+            }}
+        }}
+
+        // 1.5 点击「添加到购物袋」主加购按钮
+        if (!state.clickedAdd) {{
+            const addBtn = document.querySelector(
+                'button[name="add-to-cart"], button[data-autom="add-to-cart"], button[data-autom="addToCart"], button[id*="add-to-cart"], button[type="submit"].as-purchaseinfo-button, button.as-purchaseinfo-button, .as-buyflow-addtocart button'
+            );
+            if (addBtn && !addBtn.disabled) {{
+                state.clickedAdd = true;
+                showHUD('选配就绪，正在极速加入购物袋...');
+                addBtn.click();
+                playBeep();
+                // 如果加购后未自动跳转，1.2 秒后保底直跳购物袋推进
+                setTimeout(() => {{
+                    if (window.location.href.includes('/shop/buy-') || window.location.href.includes('/shop/product/')) {{
+                        const currentBagBtn = document.querySelector('button[name="proceed"], button[data-autom="proceed-to-checkout"], a[href*="/shop/bag"]');
+                        if (currentBagBtn) {{
+                            currentBagBtn.click();
+                        }} else {{
+                            window.location.href = 'https://www.apple.com.cn/shop/bag';
+                        }}
+                    }}
+                }}, 1200);
+            }}
         }}
     }}
 
@@ -174,7 +278,7 @@ r#"// ==UserScript==
     function handleBagPage() {{
         if (state.clickedCheckout) return;
         const checkoutBtn = document.querySelector(
-            'button[name="proceed"], button[data-autom="checkout"], #shoppingCart\\.actions\\.checkout, button.as-bag-action, button[data-autom="bag-checkout-button"]'
+            '#shoppingCart\\.actions\\.navCheckout, #shoppingCart\\.actions\\.checkout, button[name="proceed"], button[data-autom="checkout"], button.as-bag-action, button[data-autom="bag-checkout-button"]'
         );
         if (checkoutBtn && !checkoutBtn.disabled) {{
             state.clickedCheckout = true;
@@ -184,23 +288,35 @@ r#"// ==UserScript==
         }} else {{
             const emptyNotice = document.querySelector('.as-shoppingcart-empty, [data-autom*="empty"]');
             if (emptyNotice) {{
-                showHUD('⚠️ 购物袋当前为空，请确认目标商品是否已成功加购', false);
+                showHUD('⚠️ 购物袋当前为空，正在等待商品入袋...', false);
             }}
         }}
     }}
 
     // 步骤 3：访客结账确认（若未登录）
     function handleSignInPage() {{
-        const guestBtn = document.querySelector('button[id="guest-checkout"], button[data-autom="guest-checkout"]');
+        let guestBtn = document.querySelector(
+            'button[id*="guestLogin"], button#signIn\\.guestLogin\\.guestLogin, button[id="guest-checkout"], button[data-autom="guest-checkout"], button[data-autom*="guest"]'
+        );
+        if (!guestBtn) {{
+            const buttons = document.querySelectorAll('button, a[role="button"]');
+            for (const b of buttons) {{
+                const t = (b.textContent || '').trim();
+                if (t.includes('以游客身份继续') || t.includes('访客结账') || t.includes('游客结账') || t.includes('以訪客身分繼續') || t.includes('Continue as Guest')) {{
+                    guestBtn = b;
+                    break;
+                }}
+            }}
+        }}
         if (guestBtn && !guestBtn.disabled) {{
-            showHUD('检测到访客结账，正在自动进入...');
+            showHUD('检测到游客结账，正在自动进入...');
             guestBtn.click();
         }} else {{
-            showHUD('请确认 Apple ID 登录状态以继续抢单');
+            showHUD('请登录 Apple ID 以继续抢单');
         }}
     }}
 
-    // 步骤 4：履约方式选择（选择「到店自提」与锁定门店）
+    // 步骤 4：履约方式选择（选择「到店自提」与智能匹配门店）
     function handleFulfillment() {{
         // 选择零售店取货
         if (!state.selectedPickup) {{
@@ -213,17 +329,37 @@ r#"// ==UserScript==
         }}
 
         // 匹配目标零售店
-        if (!state.selectedStore && (CONFIG.targetStoreNumber || CONFIG.targetStoreTitle)) {{
-            const storeCards = document.querySelectorAll('[data-autom*="store-list"] label, .as-retail-store, [data-autom*="store-item"]');
-            for (const card of storeCards) {{
-                const text = card.textContent || '';
-                if ((CONFIG.targetStoreNumber && text.includes(CONFIG.targetStoreNumber)) ||
-                    (CONFIG.targetStoreTitle && text.includes(CONFIG.targetStoreTitle))) {{
-                    const radio = card.querySelector('input[type="radio"]') || card;
+        if (!state.selectedStore) {{
+            const storeCards = document.querySelectorAll('[data-autom*="store-list"] label, .as-retail-store, [data-autom*="store-item"], .as-storelocator-storeitem');
+            if (storeCards.length > 0) {{
+                let matchedCard = null;
+                let matchedName = '';
+
+                // 优先在用户的监控门店列表中寻找匹配
+                if (CONFIG.targetStores && CONFIG.targetStores.length > 0) {{
+                    for (const store of CONFIG.targetStores) {{
+                        for (const card of storeCards) {{
+                            if (matchStore(card, store)) {{
+                                matchedCard = card;
+                                matchedName = store.title || store.number;
+                                break;
+                            }}
+                        }}
+                        if (matchedCard) break;
+                    }}
+                }}
+
+                // 如果未精准匹配到监控门店，但列表只有一个门店，回退为列表中第一个门店
+                if (!matchedCard && storeCards.length === 1) {{
+                    matchedCard = storeCards[0];
+                    matchedName = matchedCard.textContent.trim().split('\n')[0];
+                }}
+
+                if (matchedCard) {{
+                    const radio = matchedCard.querySelector('input[type="radio"]') || matchedCard;
                     radio.click();
                     state.selectedStore = true;
-                    showHUD(`已锁定目标门店：${{CONFIG.targetStoreTitle || CONFIG.targetStoreNumber}}`);
-                    break;
+                    showHUD(`已锁定自提门店：${{matchedName}}`);
                 }}
             }}
         }}
@@ -243,13 +379,13 @@ r#"// ==UserScript==
         ));
 
         if (timeSlotRadios.length > 0) {{
-            // 默认优先抢占首个可用时段
+            // 优先抢占首个可用时段
             const targetSlot = timeSlotRadios[0];
             targetSlot.click();
             targetSlot.dispatchEvent(new Event('change', {{ bubbles: true }}));
             state.selectedTimeSlot = true;
             playBeep();
-            showHUD('🎉 已秒抢最早可用预约时段！正在推进...', false);
+            showHUD('🎉 已秒抢可用预约时段！正在推进...', false);
 
             setTimeout(() => {{
                 const nextBtn = document.querySelector('button[data-autom="continue"], button[name="continue"]');
@@ -293,7 +429,7 @@ r#"// ==UserScript==
 
         if (hasFilled) {{
             state.filledIdentity = true;
-            showHUD('已自动填妥取货人身份证与联系信息，正在前往付款...');
+            showHUD('已填妥取货人身份证与联系信息，正在前往付款...');
             setTimeout(() => {{
                 const nextBtn = document.querySelector('button[data-autom="continue"], button[name="continue"]');
                 if (nextBtn && !nextBtn.disabled) nextBtn.click();
@@ -320,7 +456,7 @@ r#"// ==UserScript==
             state.selectedPayment = true;
             state.completed = true;
             playBeep();
-            showHUD('🎉 抢单全流程完成！已到达付款阶段，请打开手机扫码完成支付！', true);
+            showHUD('🎉 抢单全流程就绪！已到达付款阶段，请打开手机扫码完成支付！', true);
         }}
     }}
 
@@ -355,9 +491,8 @@ r#"// ==UserScript==
         email = email,
         payment_method = payment_method,
         time_pref = time_pref,
-        store_number = store_number,
-        store_title = store_title,
-        part_number = part_number,
+        target_stores_json = target_stores_json,
+        target_parts_json = target_parts_json,
     )
 }
 
@@ -376,7 +511,7 @@ mod tests {
             time_slot_preference: "earliest".into(),
             payment_method: "alipay".into(),
         };
-        let target = Target {
+        let targets = vec![Target {
             locale: "zh_CN".into(),
             store_number: "R683".into(),
             store_title: "上海-环球港".into(),
@@ -385,22 +520,23 @@ mod tests {
             companion_part: None,
             companion_name: None,
             kit_part: None,
-        };
+        }];
 
-        let script = generate_userscript(&config, Some(&target));
+        let script = generate_userscript(&config, &targets);
         assert!(script.contains("// ==UserScript=="));
         assert!(script.contains("fullName: \"张三\""));
         assert!(script.contains("idCardNumber: \"1234\""));
-        assert!(script.contains("targetStoreNumber: \"R683\""));
-        assert!(script.contains("targetStoreTitle: \"上海-环球港\""));
-        assert!(script.contains("targetPartNumber: \"MG6X4CH/A\""));
+        assert!(script.contains("R683"));
+        assert!(script.contains("上海-环球港"));
+        assert!(script.contains("choose-noTradeIn"));
+        assert!(script.contains("noapplecare"));
         assert!(script.contains("enabled: true"));
     }
 
     #[test]
     fn 禁用状态下脚本保持标记() {
         let config = AutoCheckoutConfig::default();
-        let script = generate_userscript(&config, None);
+        let script = generate_userscript(&config, &[]);
         assert!(script.contains("enabled: false"));
     }
 }

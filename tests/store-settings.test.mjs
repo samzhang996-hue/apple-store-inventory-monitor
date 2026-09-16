@@ -27,6 +27,15 @@ const defaults = {
   deliveryRegion: null,
   barkUrl: "https://example.invalid/old", soundEnabled: true, openOnHit: "bag",
   productBarkUrls: {},
+  autoCheckout: {
+    enabled: false,
+    fullName: "",
+    idCardNumber: "",
+    phoneNumber: "",
+    email: "",
+    timeSlotPreference: "earliest",
+    paymentMethod: "alipay",
+  },
 };
 let generation = 0;
 async function setup() {

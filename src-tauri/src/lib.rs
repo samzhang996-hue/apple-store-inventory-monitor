@@ -773,8 +773,7 @@ fn get_in_stock_log_path() -> Result<String, String> {
 #[tauri::command]
 fn get_auto_checkout_script(app: AppHandle) -> Result<String, String> {
     let settings = app.state::<AppState>().settings_snapshot();
-    let target = settings.targets.first();
-    Ok(apw_core::auto_checkout::generate_userscript(&settings.auto_checkout, target))
+    Ok(apw_core::auto_checkout::generate_userscript(&settings.auto_checkout, &settings.targets))
 }
 
 /// 快速测试抢单直达通道（在系统默认浏览器中打开购物袋或首个目标商品）。
