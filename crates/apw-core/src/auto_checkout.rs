@@ -41,7 +41,7 @@ pub fn generate_userscript(config: &AutoCheckoutConfig, targets: &[Target]) -> S
 r#"// ==UserScript==
 // @name         Apple Store 极速自动抢单与结账助手（果到雷达专享版）
 // @namespace    https://github.com/samzhang996-hue/apple-store-inventory-monitor
-// @version      1.1.0
+// @version      1.2.0
 // @description  到店取货库存命中后，毫秒级自动跳过折抵与AppleCare、加购、锁定门店、抢占预约时段、填充身份信息并直达支付二维码页面。
 // @author       果到雷达 (Apple Store Inventory Monitor)
 // @match        https://www.apple.com.cn/shop/*
