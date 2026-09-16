@@ -41,7 +41,7 @@ pub fn generate_userscript(config: &AutoCheckoutConfig, targets: &[Target]) -> S
 r#"// ==UserScript==
 // @name         Apple Store 极速自动抢单与结账助手（果到雷达专享版）
 // @namespace    https://github.com/samzhang996-hue/apple-store-inventory-monitor
-// @version      1.2.0
+// @version      1.2.1
 // @description  到店取货库存命中后，毫秒级自动跳过折抵与AppleCare、加购、锁定门店、抢占预约时段、填充身份信息并直达支付二维码页面。
 // @author       果到雷达 (Apple Store Inventory Monitor)
 // @match        https://www.apple.com.cn/shop/*
@@ -167,22 +167,27 @@ r#"// ==UserScript==
 
     // 步骤 1：商品选配与详情页快速推进（自动跳过折抵与 AppleCare+，秒级加购）
     function handleProductPage() {{
-        // 1.1 加购后弹出的侧边抽屉、配件选配页（step=attach）或浮层，优先点击「结账」或「查看购物袋」
-        const overlayProceedBtn = document.querySelector(
-            'button[name="proceed"], button[data-autom="proceed"], button[data-autom="reviewBag"], button[data-autom="proceed-to-checkout"], button[data-autom="checkout"], a[data-autom="checkout"], a[data-autom="proceed"], button.as-overlay-action, a[href*="/shop/bag"]'
-        );
-        if (overlayProceedBtn && !overlayProceedBtn.disabled) {{
-            showHUD('商品已入袋，正在极速进入购物袋/结账...', false);
-            overlayProceedBtn.click();
-            return;
-        }}
-
-        // 若直接进入了配件推荐页 (step=attach)，且存在查看购物袋按钮，直接点击推进
+        // 1.1 若直接进入了配件推荐页 (step=attach)，点击「查看购物袋」推进
         if (window.location.search.includes('step=attach')) {{
-            const attachProceedBtn = document.querySelector('button[data-autom="proceed"], button[name="proceed"], a[href*="/shop/bag"]');
+            const attachProceedBtn = document.querySelector(
+                'button[data-autom="proceed"], button[name="proceed"], button[data-autom="reviewBag"], .as-attach-actions button'
+            );
             if (attachProceedBtn && !attachProceedBtn.disabled) {{
                 showHUD('已跳过配件推荐，正在进入购物袋...');
                 attachProceedBtn.click();
+                return;
+            }}
+        }}
+
+        // 1.2 加购成功后弹出的侧边抽屉或模态浮层，点击浮层内的「结账」推进（严格限定在浮层内，严防误触顶部全局导航栏 #globalnav）
+        const overlay = document.querySelector('.as-overlay, [data-autom*="overlay"], .as-sidecart, .as-buyflow-overlay, .as-retailoverlay, .as-drawer');
+        if (overlay) {{
+            const overlayProceedBtn = overlay.querySelector(
+                'button[data-autom="proceed-to-checkout"], button[data-autom="checkout"], a[data-autom="checkout"], button[name="proceed"], a[href*="/shop/bag"]'
+            );
+            if (overlayProceedBtn && !overlayProceedBtn.disabled) {{
+                showHUD('商品已入袋，正在极速进入结账...', false);
+                overlayProceedBtn.click();
                 return;
             }}
         }}
@@ -477,11 +482,22 @@ r#"// ==UserScript==
         }}
     }}
 
-    // 快速轮询 + MutationObserver 双保险监听
-    const observer = new MutationObserver(() => tick());
+    // 快速轮询 + 节流保护监听（防止 DOM 变动与 HUD 自激循环）
+    let isTicking = false;
+    function safeTick() {{
+        if (isTicking) return;
+        isTicking = true;
+        try {{
+            tick();
+        }} finally {{
+            setTimeout(() => {{ isTicking = false; }}, 150);
+        }}
+    }}
+
+    const observer = new MutationObserver(() => safeTick());
     observer.observe(document.documentElement, {{ childList: true, subtree: true }});
-    setInterval(tick, 300);
-    tick();
+    setInterval(safeTick, 250);
+    safeTick();
 }})();
 "#,
         enabled = config.enabled,
